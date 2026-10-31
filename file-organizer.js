@@ -1,11 +1,36 @@
+import path from "node:path";
 import Scanner from "./lib/scanner.js";
 import DuplicateFinder from "./lib/duplicates.js";
+import Organizer from "./lib/organizer.js";
 import {
   formatSize,
   updateProgress,
   clearCurrentLine,
   handleFileSystemError,
 } from "./lib/utils.js";
+
+function parseArgs(args) {
+  const command = args[0];
+  const positionals = [];
+  const options = {};
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--")) {
+      const key = arg.slice(2);
+      const nextArg = args[i + 1];
+      if (nextArg && !nextArg.startsWith("--")) {
+        options[key] = nextArg;
+        i++;
+      } else {
+        options[key] = true;
+      }
+    } else {
+      positionals.push(arg);
+    }
+  }
+  return { command, positionals, options };
+}
 
 async function runScan(targetPath) {
   if (!targetPath) {
@@ -119,16 +144,70 @@ async function runDuplicates(targetPath) {
   }
 }
 
+async function runOrganize(sourcePath, targetPath) {
+  if (!sourcePath || !targetPath) {
+    console.error(
+      "❌ Error: Both source and --output target paths are required.",
+    );
+    console.error(
+      "Usage: node file-organizer.js organize /source/directory --output /target/directory",
+    );
+    process.exit(1);
+  }
+
+  const organizer = new Organizer();
+
+  organizer.on("organize-start", (data) => {
+    console.log(`📦 Organizing: ${data.source}`);
+    console.log(`Target: ${data.target}\n`);
+  });
+
+  organizer.on("directories-created", (categories) => {
+    console.log("Creating folders...");
+    categories.forEach((category) => console.log(`  ✓ ${category}/`));
+    console.log();
+  });
+
+  organizer.on("copy-complete", ({ current, total }) => {
+    updateProgress("Copying files...", current, total);
+  });
+
+  try {
+    const stats = await organizer.organize(sourcePath, targetPath);
+    clearCurrentLine();
+
+    const lastFolder = path.basename(path.resolve(targetPath));
+
+    console.log("✅ Organization complete!");
+    console.log("\nSummary:");
+    for (const [category, count] of Object.entries(stats.byCategory)) {
+      console.log(
+        `  ${(category + ":").padEnd(10)} ${String(count).padStart(4)} files → ${lastFolder}/${category}/`,
+      );
+    }
+    console.log(
+      `\nTotal copied: ${stats.totalCopied} files (${formatSize(stats.totalBytes)})`,
+    );
+  } catch (err) {
+    clearCurrentLine();
+    handleFileSystemError(err, sourcePath);
+  }
+}
+
 async function main() {
-  const [, , command, targetPath] = process.argv;
+  const { command, positionals, options } = parseArgs(process.argv.slice(2));
 
   switch (command) {
     case "scan":
-      await runScan(targetPath);
+      await runScan(positionals[0]);
       break;
 
     case "duplicates":
-      await runDuplicates(targetPath);
+      await runDuplicates(positionals[0]);
+      break;
+
+    case "organize":
+      await runOrganize(positionals[0], options.output);
       break;
 
     default:
@@ -140,6 +219,7 @@ async function main() {
       console.log(
         "  duplicates <dir>             Searching for duplicates using SHA-256",
       );
+      console.log("  organize <dir> --output <dir>           Sort by category");
       process.exit(command ? 1 : 0);
   }
 }
