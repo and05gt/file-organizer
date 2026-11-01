@@ -26,6 +26,7 @@ Built purely with modern **ES Modules**, an **EventEmitter** architecture for re
 Commands can be executed via `node file-organizer.js <command>` or via the shortcut `npm run` scripts. When using npm scripts, pass arguments and flags after the double-dash (`--`).
 
 1. `scan` - Directory Audit & Statistics
+
    Recursively scans the target directory and its subfolders, gathering detailed metrics on file counts, total size, extension breakdown, modification age, top 3 largest files, and the oldest file.
 
    ```bash
@@ -38,6 +39,7 @@ Commands can be executed via `node file-organizer.js <command>` or via the short
    - `/path/to/directory` (required): Absolute or relative path to the folder you want to inspect.
 
 2. `duplicates` - SHA-256 Duplicate Finder
+
    Identifies exact duplicate files by calculating cryptographic SHA-256 checksums, regardless of file names or subfolder placement. Files are read chunk-by-chunk using `fs.createReadStream()`, preventing high RAM consumption on large media files.
 
    ```bash
@@ -50,6 +52,7 @@ Commands can be executed via `node file-organizer.js <command>` or via the short
    - `/path/to/directory` (required): Directory path to check for duplicate content.
 
 3. `organize` - Categorized File Sorting
+
    Copies files from the source directory into a structured destination folder grouped by category. Original files remain untouched.
    - Small files (< 10 MB): Copied quickly with native `fs.copyFile()`.
    - Large files ($\ge$ 10 MB): Copied via `stream/promises pipeline()` with backpressure management.
@@ -78,6 +81,7 @@ Commands can be executed via `node file-organizer.js <command>` or via the short
    ```
 
 4. `cleanup` - Prune Stale Files
+
    Finds files modified more than $N$ days ago. To prevent accidental deletions, the command defaults to Dry Run mode unless the `--confirm` flag is explicitly provided.
 
    Dry Run Mode (Preview Only)
