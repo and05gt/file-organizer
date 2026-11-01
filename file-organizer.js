@@ -2,12 +2,47 @@ import path from "node:path";
 import Scanner from "./lib/scanner.js";
 import DuplicateFinder from "./lib/duplicates.js";
 import Organizer from "./lib/organizer.js";
-import {
-  formatSize,
-  updateProgress,
-  clearCurrentLine,
-  handleFileSystemError,
-} from "./lib/utils.js";
+import Cleanup from "./lib/cleanup.js";
+
+function formatSize(bytes) {
+  if (bytes === 0) return "0 B";
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  } else if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  } else {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+}
+
+function drawProgressBar(current, total, width = 20) {
+  const percentage = current / total;
+  const filled = Math.round(percentage * width);
+  const bar = "█".repeat(filled) + "░".repeat(width - filled);
+  return `${bar} ${current}/${total}`;
+}
+
+function updateProgress(prefix, current, total) {
+  const bar = drawProgressBar(current, total);
+  process.stdout.write(`\r${prefix} ${bar}`);
+}
+
+function clearCurrentLine() {
+  process.stdout.write("\r" + " ".repeat(80) + "\r");
+}
+
+function handleFileSystemError(error, targetPath) {
+  if (error.code === "ENOENT") {
+    console.error(`❌ Error: Directory not found: ${targetPath}`);
+  } else if (error.code === "EACCES" || error.code === "EPERM") {
+    console.error(`❌ Error: Permission denied: ${targetPath}`);
+  } else if (error.code === "ENOSPC") {
+    console.error(`❌ Error: No space left on device: ${targetPath}`);
+  } else {
+    console.error(`❌ Unexpected error: ${error.message}`);
+  }
+  process.exit(1);
+}
 
 function parseArgs(args) {
   const command = args[0];
@@ -19,7 +54,7 @@ function parseArgs(args) {
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
       const nextArg = args[i + 1];
-      if (nextArg && !nextArg.startsWith("--")) {
+      if (nextArg !== undefined && !nextArg.startsWith("--")) {
         options[key] = nextArg;
         i++;
       } else {
@@ -51,7 +86,7 @@ async function runScan(targetPath) {
 
   try {
     const stats = await scanner.scan(targetPath);
-    clearCurrentLine();
+    console.log("\n");
 
     console.log("\n📊 Scan Results:");
     console.log("━".repeat(34));
@@ -114,7 +149,7 @@ async function runDuplicates(targetPath) {
 
   try {
     const result = await finder.findDuplicates(targetPath);
-    clearCurrentLine();
+    console.log("\n");
 
     console.log(
       `\nFound ${result.groups.length} duplicate groups (${formatSize(result.totalWastedSpace)} wasted):\n`,
@@ -174,7 +209,7 @@ async function runOrganize(sourcePath, targetPath) {
 
   try {
     const stats = await organizer.organize(sourcePath, targetPath);
-    clearCurrentLine();
+    console.log("\n");
 
     const lastFolder = path.basename(path.resolve(targetPath));
 
@@ -194,6 +229,91 @@ async function runOrganize(sourcePath, targetPath) {
   }
 }
 
+async function runCleanup(targetPath, olderThanArg, isConfirm) {
+  if (!targetPath) {
+    console.error('❌ Error: Directory path is required for "cleanup"');
+    console.error(
+      "Usage: node file-organizer.js cleanup /path/to/directory --older-than 90 [--confirm]",
+    );
+    process.exit(1);
+  }
+
+  const daysThreshold = parseInt(olderThanArg, 10);
+  if (isNaN(daysThreshold) || daysThreshold < 0) {
+    console.error(
+      "❌ Error: Please specify valid days count via --older-than <number>",
+    );
+    process.exit(1);
+  }
+
+  const cleanup = new Cleanup();
+  const foundFiles = [];
+
+  cleanup.once("cleanup-start", (data) => {
+    console.log(`🧹 Cleanup: ${data.directory}`);
+    console.log(`Looking for files older than ${data.daysThreshold} days...\n`);
+  });
+
+  cleanup.on("file-found", (file) => {
+    foundFiles.push(file);
+  });
+
+  cleanup.on("file-deleted", ({ current, total }) => {
+    updateProgress("Deleting...", current, total);
+  });
+
+  cleanup.on("delete-error", ({ file, error }) => {
+    console.error(`\n⚠️  Could not delete ${file}: ${error.message}`);
+  });
+
+  try {
+    const initialScan = await cleanup.cleanup(targetPath, daysThreshold, false);
+
+    console.log(`Found ${initialScan.totalFiles} files to delete:\n`);
+    console.log("━".repeat(34));
+
+    const previewFiles = initialScan.files.slice(0, 3);
+    previewFiles.forEach((file) => {
+      console.log(file.name);
+      console.log(`  Size: ${formatSize(file.size)}`);
+      console.log(
+        `  Modified: ${file.daysOld} days ago (${file.dateFormatted})\n`,
+      );
+    });
+
+    if (initialScan.files.length > 3) {
+      console.log(`... (${initialScan.files.length - 3} more files)`);
+    }
+
+    console.log("━".repeat(34));
+    console.log();
+    console.log(
+      `Total: ${initialScan.totalFiles} files (${formatSize(initialScan.totalBytes)})\n`,
+    );
+
+    if (!isConfirm) {
+      console.log("⚠️  DRY RUN MODE: No files were deleted.");
+      console.log("To actually delete these files, run with --confirm flag.");
+      return;
+    }
+
+    console.log(
+      `⚠️  DELETING ${initialScan.totalFiles} files (${formatSize(initialScan.totalBytes)}). This action cannot be undone!\n`,
+    );
+
+    const deleteResult = await cleanup.cleanup(targetPath, daysThreshold, true);
+    console.log("\n");
+
+    console.log("✅ Cleanup complete!");
+    console.log(
+      `Deleted: ${deleteResult.totalFiles} files (${formatSize(deleteResult.totalBytes)} freed)`,
+    );
+  } catch (err) {
+    clearCurrentLine();
+    handleFileSystemError(err, targetPath);
+  }
+}
+
 async function main() {
   const { command, positionals, options } = parseArgs(process.argv.slice(2));
 
@@ -210,6 +330,14 @@ async function main() {
       await runOrganize(positionals[0], options.output);
       break;
 
+    case "cleanup":
+      await runCleanup(
+        positionals[0],
+        options["older-than"],
+        Boolean(options.confirm),
+      );
+      break;
+
     default:
       console.log("Usage: node file-organizer.js <command> [arguments]");
       console.log("\nAvailable commands:");
@@ -220,6 +348,9 @@ async function main() {
         "  duplicates <dir>             Searching for duplicates using SHA-256",
       );
       console.log("  organize <dir> --output <dir>           Sort by category");
+      console.log(
+        "  cleanup <dir> --older-than <days>   Deleting old files (dry run / --confirm)",
+      );
       process.exit(command ? 1 : 0);
   }
 }
