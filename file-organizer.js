@@ -6,6 +6,7 @@ import Cleanup from "./lib/cleanup.js";
 
 function formatSize(bytes) {
   if (bytes === 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) {
     return `${(bytes / 1024).toFixed(1)} KB`;
   } else if (bytes < 1024 * 1024 * 1024) {
@@ -25,10 +26,6 @@ function drawProgressBar(current, total, width = 20) {
 function updateProgress(prefix, current, total) {
   const bar = drawProgressBar(current, total);
   process.stdout.write(`\r${prefix} ${bar}`);
-}
-
-function clearCurrentLine() {
-  process.stdout.write("\r" + " ".repeat(80) + "\r");
 }
 
 function handleFileSystemError(error, targetPath) {
@@ -84,11 +81,15 @@ async function runScan(targetPath) {
     updateProgress("Processing...", current, total);
   });
 
+  scanner.on("file-error", ({ file, error }) => {
+    process.stdout.write(`\n⚠️  Skipped "${file}": ${error.message}\n`);
+  });
+
   try {
     const stats = await scanner.scan(targetPath);
     console.log("\n");
 
-    console.log("\n📊 Scan Results:");
+    console.log("📊 Scan Results:");
     console.log("━".repeat(34));
     console.log(`Total files: ${stats.totalFiles}`);
     console.log(`Total size: ${formatSize(stats.totalSize)}\n`);
@@ -119,7 +120,7 @@ async function runScan(targetPath) {
       );
     }
   } catch (err) {
-    clearCurrentLine();
+    console.log();
     handleFileSystemError(err, targetPath);
   }
 
@@ -147,12 +148,16 @@ async function runDuplicates(targetPath) {
     updateProgress("Calculating hashes...", current, total);
   });
 
+  finder.on("file-error", ({ file, error }) => {
+    process.stdout.write(`\n⚠️  Skipped "${file}": ${error.message}\n`);
+  });
+
   try {
     const result = await finder.findDuplicates(targetPath);
     console.log("\n");
 
     console.log(
-      `\nFound ${result.groups.length} duplicate groups (${formatSize(result.totalWastedSpace)} wasted):\n`,
+      `Found ${result.groups.length} duplicate groups (${formatSize(result.totalWastedSpace)} wasted):\n`,
     );
 
     result.groups.forEach((group, index) => {
@@ -174,7 +179,7 @@ async function runDuplicates(targetPath) {
       `💾 Total wasted space: ${formatSize(result.totalWastedSpace)}`,
     );
   } catch (err) {
-    clearCurrentLine();
+    console.log();
     handleFileSystemError(err, targetPath);
   }
 }
@@ -207,6 +212,10 @@ async function runOrganize(sourcePath, targetPath) {
     updateProgress("Copying files...", current, total);
   });
 
+  organizer.on("copy-error", ({ file, error }) => {
+    process.stdout.write(`\n⚠️  Failed to copy "${file}": ${error.message}\n`);
+  });
+
   try {
     const stats = await organizer.organize(sourcePath, targetPath);
     console.log("\n");
@@ -224,7 +233,7 @@ async function runOrganize(sourcePath, targetPath) {
       `\nTotal copied: ${stats.totalCopied} files (${formatSize(stats.totalBytes)})`,
     );
   } catch (err) {
-    clearCurrentLine();
+    console.log();
     handleFileSystemError(err, sourcePath);
   }
 }
@@ -258,6 +267,10 @@ async function runCleanup(targetPath, olderThanArg, isConfirm) {
     foundFiles.push(file);
   });
 
+  cleanup.on("file-error", ({ file, error }) => {
+    process.stdout.write(`\n⚠️  Skipped "${file}": ${error.message}\n`);
+  });
+
   cleanup.on("file-deleted", ({ current, total }) => {
     updateProgress("Deleting...", current, total);
   });
@@ -268,6 +281,13 @@ async function runCleanup(targetPath, olderThanArg, isConfirm) {
 
   try {
     const initialScan = await cleanup.cleanup(targetPath, daysThreshold, false);
+
+    if (initialScan.totalFiles === 0) {
+      console.log(
+        "No files found matching the age criteria. Nothing to delete.",
+      );
+      return;
+    }
 
     console.log(`Found ${initialScan.totalFiles} files to delete:\n`);
     console.log("━".repeat(34));
@@ -309,7 +329,7 @@ async function runCleanup(targetPath, olderThanArg, isConfirm) {
       `Deleted: ${deleteResult.totalFiles} files (${formatSize(deleteResult.totalBytes)} freed)`,
     );
   } catch (err) {
-    clearCurrentLine();
+    console.log();
     handleFileSystemError(err, targetPath);
   }
 }
